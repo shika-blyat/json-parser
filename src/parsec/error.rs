@@ -18,4 +18,7 @@ impl ParserError {
             reason: Some(reason),
         }
     }
+    pub fn set_reason(&mut self, new_reason: String) {
+        self.reason = Some(new_reason);
+    }
 }

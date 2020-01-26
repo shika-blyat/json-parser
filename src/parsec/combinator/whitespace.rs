@@ -1,4 +1,4 @@
-use crate::{Parser, Remaining};
+use crate::parsec::{Parser, Remaining};
 
 pub fn ws<'a>() -> impl Parser<'a, ()> {
     |s: Remaining<'a>| match s.rem.find(|c: char| !c.is_whitespace()) {

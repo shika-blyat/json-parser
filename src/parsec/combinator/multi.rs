@@ -1,4 +1,4 @@
-use crate::Parser;
+use crate::parsec::Parser;
 
 pub fn many<'a, T>(mut predicate: impl Parser<'a, T>) -> impl Parser<'a, Vec<T>> {
     move |s| {

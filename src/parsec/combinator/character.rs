@@ -1,13 +1,13 @@
-use crate::{Parser, ParserError, Remaining};
+use crate::parsec::{JsonError, Parser, ParserError, Remaining};
 
 pub fn label<'a>(str_to_match: &'a str) -> impl Parser<'a, &'a str> {
     move |s: Remaining<'a>| {
         if str_to_match.len() > s.rem_len() {
-            return Err((
+            return Err(JsonError::Failure(
                 s,
                 ParserError::new(
-                    s.rem_len()..s.pos,
-                    format!("Expected `{}` found `{}`", str_to_match, s),
+                    0..s.rem.find(|c| c == '\n').unwrap_or(s.rem.len()),
+                    format!("Expected `{}` found `{}`", str_to_match, &s.rem),
                 ),
             ));
         }
@@ -15,10 +15,10 @@ pub fn label<'a>(str_to_match: &'a str) -> impl Parser<'a, &'a str> {
         let chars_to_match = str_to_match.chars();
         for i in chars_to_match.into_iter() {
             if i != schars.next().unwrap() {
-                return Err((
+                return Err(JsonError::Failure(
                     s,
                     ParserError::new(
-                        s.pos..s.rem_len(),
+                        0..s.rem.find(|c| c == '\n').unwrap_or(s.rem.len()),
                         format!(
                             "Expected `{}` found `{}`",
                             str_to_match,
@@ -40,9 +40,18 @@ pub fn digit<'a>(base: u32) -> impl Parser<'a, char> {
         if let Some(c) = s.rem.chars().nth(0) {
             if c.is_digit(base) {
                 return Ok((Remaining::new(&s.rem[c.len_utf8()..], s.pos + 1), c));
+            } else {
+                Err(JsonError::Failure(
+                    s,
+                    ParserError::new(0..1, format!("{} is not a digit", c)),
+                ))
             }
+        } else {
+            Err(JsonError::Failure(
+                s,
+                ParserError::new(0..1, format!("Expected a digit, found nothing")),
+            ))
         }
-        Err((s, ParserError::new_empty()))
     }
 }
 pub fn string<'a>() -> impl Parser<'a, &'a str> {
@@ -61,12 +70,17 @@ pub fn string<'a>() -> impl Parser<'a, &'a str> {
                         last_escaped = true;
                     } else if last_escaped {
                         last_escaped = false;
+                    } else if i == '\n' {
+                        return Err(JsonError::Unsavable(
+                            remaining.pos,
+                            ParserError::new(0..k, "Unclosed string delimiter".to_string()),
+                        ));
                     }
                 }
-                Err((
-                    remaining,
+                Err(JsonError::Unsavable(
+                    remaining.pos,
                     ParserError::new(
-                        remaining.pos - 1..remaining.rem.len(),
+                        0..remaining.rem.len(),
                         "Unclosed string delimiter".to_string(),
                     ),
                 ))
