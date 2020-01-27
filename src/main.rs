@@ -70,7 +70,17 @@ pub fn value<'a>() -> impl Parser<'a, JsonValue> {
                 _ => {
                     return Err(JsonError::Failure(
                         error.rem(),
-                        ParserError::new(0..0, format!("Invalid value `{:#?}`", error.rem().rem)),
+                        ParserError::new(
+                            0..0,
+                            format!(
+                                "Invalid value `{:#?}`",
+                                &error.rem().rem[0..error
+                                    .rem()
+                                    .rem
+                                    .find(|c| c == '\n' || c == ',' || c == '}' || c == ']')
+                                    .unwrap_or(error.rem().rem.len())]
+                            ),
+                        ),
                     ))
                 }
             })
@@ -88,16 +98,62 @@ pub fn array<'a>() -> impl Parser<'a, JsonValue> {
                                 .and_then(|(remaining, _)| label(",")(remaining))
                                 .map(|(remaining, _)| (remaining, val))
                                 .map_err(|error| {
-                                    JsonError::Failure(
-                                        error.rem(),
-                                        ParserError::new(
-                                            0..1,
-                                            format!(
-                                                "Unexpected character {:#?}",
-                                                &error.rem().rem[0..1]
+                                    if value()(error.rem()).is_ok() {
+                                        JsonError::Failure(
+                                            error.rem(),
+                                            ParserError::new(
+                                                0..error
+                                                    .rem()
+                                                    .rem
+                                                    .find(|c| {
+                                                        c == '\n'
+                                                            || c == ','
+                                                            || c == '}'
+                                                            || c == ']'
+                                                    })
+                                                    .unwrap_or(error.rem().rem.len()),
+                                                format!(
+                                                    "Unexpected character {:#?}\n
+Help: You probably forgot a comma",
+                                                    &error.rem().rem[0..error
+                                                        .rem()
+                                                        .rem
+                                                        .find(|c| c == '\n'
+                                                            || c == ','
+                                                            || c == '}'
+                                                            || c == ']')
+                                                        .unwrap_or(error.rem().rem.len())]
+                                                ),
                                             ),
-                                        ),
-                                    )
+                                        )
+                                    } else {
+                                        JsonError::Failure(
+                                            error.rem(),
+                                            ParserError::new(
+                                                0..error
+                                                    .rem()
+                                                    .rem
+                                                    .find(|c| {
+                                                        c == '\n'
+                                                            || c == ','
+                                                            || c == '}'
+                                                            || c == ']'
+                                                    })
+                                                    .unwrap_or(error.rem().rem.len()),
+                                                format!(
+                                                    "Unexpected character {:#?}",
+                                                    &error.rem().rem[0..error
+                                                        .rem()
+                                                        .rem
+                                                        .find(|c| c == '\n'
+                                                            || c == ','
+                                                            || c == '}'
+                                                            || c == ']')
+                                                        .unwrap_or(error.rem().rem.len())]
+                                                ),
+                                            ),
+                                        )
+                                    }
                                 })
                         })
                 })(remaining)
@@ -108,6 +164,55 @@ pub fn array<'a>() -> impl Parser<'a, JsonValue> {
                             let (remaining, _) = ws()(remaining).unwrap();
                             vec.push(val);
                             (remaining, vec)
+                        })
+                        .map_err(|error| {
+                            println!("{:#?}", error.rem());
+                            if label(",")(error.rem()).is_ok() {
+                                JsonError::Unsavable(
+                                    error.rem().pos,
+                                    ParserError::new(
+                                        0..error
+                                            .rem()
+                                            .rem
+                                            .find(|c| c == '\n' || c == ',' || c == '}' || c == ']')
+                                            .unwrap_or(error.rem().rem.len()),
+                                        format!(
+                                            "Unexpected character {:#?}
+Help: trailing comma aren't allowed",
+                                            &error.rem().rem[0..error
+                                                .rem()
+                                                .rem
+                                                .find(|c| c == '\n'
+                                                    || c == ','
+                                                    || c == '}'
+                                                    || c == ']')
+                                                .unwrap_or(error.rem().rem.len())]
+                                        ),
+                                    ),
+                                )
+                            } else {
+                                JsonError::Unsavable(
+                                    error.rem().pos,
+                                    ParserError::new(
+                                        0..error
+                                            .rem()
+                                            .rem
+                                            .find(|c| c == '\n' || c == ',' || c == '}' || c == ']')
+                                            .unwrap_or(error.rem().rem.len()),
+                                        format!(
+                                            "Unexpected character {:#?}",
+                                            &error.rem().rem[0..error
+                                                .rem()
+                                                .rem
+                                                .find(|c| c == '\n'
+                                                    || c == ','
+                                                    || c == '}'
+                                                    || c == ']')
+                                                .unwrap_or(error.rem().rem.len())]
+                                        ),
+                                    ),
+                                )
+                            }
                         })
                 })
                 .map(|(remaining, vec)| (remaining, JsonValue::Array(vec)))
@@ -145,7 +250,7 @@ pub fn keyword<'a>() -> impl Parser<'a, JsonValue> {
                                 "Expected either true, false or null, found {}",
                                 &rem.rem[0..rem
                                     .rem
-                                    .find(|c| c == '\n' || c == ',')
+                                    .find(|c| c == '\n' || c == ',' || c == '}' || c == ']')
                                     .unwrap_or(rem.rem.len())]
                             ));
                             return Err(JsonError::Unsavable(rem.pos, reason));
@@ -281,7 +386,7 @@ Help: Trailing comma aren't allowed in json"
                                     "Expected a `}}`, found `{}`",
                                     &rem.rem[0..rem
                                         .rem
-                                        .find(|c| c == '\n' || c == ',')
+                                        .find(|c| c == '\n' || c == ',' || c == '}')
                                         .unwrap_or(rem.rem.len())]
                                 );
                                 error.set_reason(reason);
@@ -322,10 +427,10 @@ pub fn json<'a>(input: &'a str) -> Option<JsonObject> {
 }
 const CODE: &str = r#"
 {
-    "num": fals,
+    "num": false,
     "str": "abc",
     "obj": {
-        "array": [1,2,3]
+        "array": [1,"2", false,]
     }
 }"#;
 
