@@ -140,7 +140,6 @@ pub fn keyword<'a>() -> impl Parser<'a, JsonValue> {
             .or_else(|error| {
                 if let Some(c) = error.rem().rem.chars().nth(0) {
                     if c.is_alphabetic() {
-                        println!("{:#?}", error);
                         if let JsonError::Failure(rem, mut reason) = error {
                             reason.set_reason(format!(
                                 "Expected either true, false or null, found {}",
@@ -157,65 +156,139 @@ pub fn keyword<'a>() -> impl Parser<'a, JsonValue> {
             })
     }
 }
-
+pub fn member<'a>() -> impl Parser<'a, Member> {
+    |s| {
+        ws()(s)
+            .and_then(|(remaining, _)| string()(remaining))
+            .or_else(|error| {
+                if let JsonError::Failure(rem, mut error) = error {
+                    if let Ok((_, val)) = value()(rem) {
+                        match val {
+                            JsonValue::Array(_) => error.set_reason(format!(
+                                "Expected a string, found a string\n
+Help: member identifier can only be a string"
+                            )),
+                            JsonValue::Number(_) => error.set_reason(format!(
+                                "Expected a string, found a number\n
+Help: member identifier can only be a string"
+                            )),
+                            JsonValue::Object(_) => error.set_reason(format!(
+                                "Expected a string, found an object\n
+Help: member identifier can only be a string"
+                            )),
+                            JsonValue::True => error.set_reason(format!(
+                                "Expected a string, found keyword `true` \n
+Help: member identifier can only be a string"
+                            )),
+                            JsonValue::False => error.set_reason(format!(
+                                "Expected a string, found keyword `false` \n
+Help: member identifier can only be a string"
+                            )),
+                            JsonValue::Null => error.set_reason(format!(
+                                "Expected a string, found keyword `null` \n
+Help: member identifier can only be a string"
+                            )),
+                            _ => unreachable!(),
+                        }
+                        Err(JsonError::Unsavable(rem.pos, error))
+                    } else if label("}")(rem).is_ok() {
+                        error.set_reason(format!(
+                            "Expected a string`, found `}}`\n
+Help: Trailing comma aren't allowed in json"
+                        ));
+                        Err(JsonError::Unsavable(rem.pos, error))
+                    } else {
+                        error.set_reason(format!("Expected a string`, found `}}`"));
+                        Err(JsonError::Unsavable(rem.pos, error))
+                    }
+                } else {
+                    unreachable!()
+                }
+            })
+            .and_then(|(remaining, identifier)| {
+                ws()(remaining)
+                    .and_then(|(remaining, _)| label(":")(remaining))
+                    .or_else(|error| match error {
+                        JsonError::Failure(rem, mut error) => {
+                            error.set_reason(format!("Expected a `:`"));
+                            Err(JsonError::Unsavable(rem.pos, error))
+                        }
+                        JsonError::Unsavable(_, _) => Err(error),
+                        _ => unreachable!(),
+                    })
+                    .and_then(|(remaining, _)| ws()(remaining))
+                    .and_then(|(remaining, _)| value()(remaining))
+                    .or_else(|error| match error {
+                        JsonError::Failure(rem, mut error) => {
+                            error.set_reason(format!("Missing a value after `:`"));
+                            Err(JsonError::Unsavable(rem.pos, error))
+                        }
+                        JsonError::Unsavable(_, _) => Err(error),
+                        _ => unreachable!(),
+                    })
+                    .and_then(|(remaining, value)| {
+                        Ok((remaining, Member::new(identifier.to_string(), value)))
+                    })
+            })
+    }
+}
 pub fn object<'a>() -> impl Parser<'a, JsonObject> {
     |s| {
         label("{")(s)
             .and_then(|(remaining, _)| {
                 many(|s| {
-                    let (remaining, _) = ws()(s).unwrap();
-                    string()(remaining).and_then(|(remaining, identifier)| {
-                        ws()(remaining)
-                            .and_then(|(remaining, _)| label(":")(remaining))
-                            .and_then(|(remaining, _)| ws()(remaining))
-                            .and_then(|(remaining, _)| value()(remaining))
-                            .and_then(|(remaining, value)| {
-                                label(",")(remaining).and_then(|(remaining, _)| {
-                                    Ok((remaining, Member::new(identifier.to_string(), value)))
-                                })
-                            })
-                    })
+                    member()(s)
+                        .and_then(|(remaining, member)| {
+                            label(",")(remaining).and_then(|(remaining, _)| Ok((remaining, member)))
+                        })
+                        .or_else(|error| match error {
+                            JsonError::Failure(rem, mut error) => {
+                                error.set_reason(format!("Missing a value after `:`"));
+                                Err(JsonError::Unsavable(rem.pos, error))
+                            }
+                            JsonError::Unsavable(_, _) => Err(error),
+                            _ => unreachable!(),
+                        })
                 })(remaining)
             })
             .and_then(|(remaining, mut members)| {
-                let (remaining, _) = ws()(remaining).unwrap();
-                string()(remaining).and_then(|(remaining, identifier)| {
-                    ws()(remaining)
-                        .and_then(|(remaining, _)| label(":")(remaining))
-                        .and_then(|(remaining, _)| ws()(remaining))
-                        .and_then(|(remaining, _)| value()(remaining))
-                        .and_then(|(remaining, value)| {
-                            members.push(Member::new(identifier.to_string(), value));
-                            Ok((remaining, members))
-                        })
+                member()(remaining).and_then(|(remaining, member)| {
+                    members.push(member);
+                    Ok((remaining, members))
                 })
             })
             .and_then(|(remaining, members_vec)| {
                 let (remaining, _) = ws()(remaining).unwrap();
                 label("}")(remaining)
-                    .or_else(|error| {
-                        if let JsonError::Failure(rem, mut error) = error {
+                    .or_else(|error| match error {
+                        JsonError::Failure(rem, mut error) => {
                             if json_string()(rem).is_ok() {
-                                error.set_reason(format!(
-                                    "Expected a `}}`, found a string\n Help: You probably forgot a `,` here"
-                                ));
+                                error.set_reason(
+                                    "Expected a `}}`, found a string\n
+Help:You probably forgot a `,` here"
+                                        .to_string(),
+                                );
                                 Err(JsonError::Unsavable(rem.pos, error))
-                            }else if label(",")(rem).is_ok(){
-                                error.set_reason(format!(
-                                    "Expected a `}}`, found a string\n Help: Trailing comma aren't allowed in json"
-                                ));
+                            } else if label(",")(rem).is_ok() {
+                                error.set_reason(
+                                    "Expected a `}}`, found a `,`\n
+Help: Trailing comma aren't allowed in json"
+                                        .to_string(),
+                                );
+                                Err(JsonError::Unsavable(rem.pos, error))
+                            } else {
+                                let reason = format!(
+                                    "Expected a `}}`, found `{}`",
+                                    &rem.rem[0..rem
+                                        .rem
+                                        .find(|c| c == '\n' || c == ',')
+                                        .unwrap_or(rem.rem.len())]
+                                );
+                                error.set_reason(reason);
                                 Err(JsonError::Unsavable(rem.pos, error))
                             }
-                            else {
-                                error.set_reason(format!(
-                                    "Expected a `}}`, found `{}`", 
-                                    &rem.rem[0..rem.rem.find(|c| c == '\n' || c == ',').unwrap_or(rem.rem.len())]
-                                ));
-                                Err(JsonError::Unsavable(rem.pos, error))
-                            }
-                        } else {
-                            unreachable!()
                         }
+                        _ => unreachable!(),
                     })
                     .and_then(|(remaining, _)| {
                         Ok((
@@ -228,6 +301,8 @@ pub fn object<'a>() -> impl Parser<'a, JsonObject> {
             })
     }
 }
+/*
+*/
 pub fn json<'a>(input: &'a str) -> Option<JsonObject> {
     let input = input.trim();
     match object()(Remaining::new(input, 0)) {
@@ -245,14 +320,14 @@ pub fn json<'a>(input: &'a str) -> Option<JsonObject> {
         }
     }
 }
-const CODE: &str = "
+const CODE: &str = r#"
 {
-    \"num\": false,
-    \"str\": \"abc\",
-    \"obj\": {
-        \"array\": [1,2,3]
-    
-}";
+    "num": fals,
+    "str": "abc",
+    "obj": {
+        "array": [1,2,3]
+    }
+}"#;
 
 fn main() {
     println!("{:#?}", json(CODE));
